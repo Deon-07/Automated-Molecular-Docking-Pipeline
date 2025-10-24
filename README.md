@@ -1,4 +1,4 @@
-```markdown
+
 # Automated Molecular Docking Pipeline
 
 ![Bash](https://img.shields.io/badge/Bash-Script-green)
