@@ -51,13 +51,13 @@ tar -xzf autodock_vina_1_1_2_linux_x86.tgz
 
 3. **Make script executable**:
 ```bash
-chmod +x dock_v4.sh
+chmod +x Auto-dock.sh
 ```
 
 ## ⚙️ Configuration
 
 ### Edit Script Parameters
-Modify the hardcoded parameters in `dock_v4.sh`:
+Modify the hardcoded parameters in `Auto-dock.sh`:
 
 ```bash
 # Receptor file path
@@ -97,7 +97,7 @@ CPU_THREADS="8"      # Number of CPU threads to use
 ### Example Directory Structure
 ```
 project/
-├── dock_v4.sh
+├── Auto-dock.sh
 ├── receptor.pdb
 └── ligands/
     ├── compound1.sdf
@@ -109,7 +109,7 @@ project/
 
 ### Basic Execution
 ```bash
-./dock_v4.sh
+./Auto-dock.sh
 ```
 
 ### Step-by-Step Process
