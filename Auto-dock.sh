@@ -523,41 +523,6 @@ else
     log_message "  -> Skipping histogram (Python3 not found)"
 fi
 
-# Phase 3: 3D Render of Top Hit (requires PyMOL)
-if command -v pymol &>/dev/null; then
-    # Find the best ligand from temp scores
-    if [ -s "$temp_scores_file" ] 2>/dev/null || [ -f "${MAIN_OUTPUT_DIR}/all_best_scores.tmp" ]; then
-        # Re-create temp file if needed for top hit identification
-        TEMP_SCORES="${MAIN_OUTPUT_DIR}/all_best_scores.tmp"
-        if [ ! -f "$TEMP_SCORES" ]; then
-            touch "$TEMP_SCORES"
-            for lf in $(find "${VINA_OUTPUT_DIR}" -type f -name "*_log.txt"); do
-                ln=$(basename "$(dirname "$lf")")
-                grep -E "^ +1 " "$lf" | awk -v name="$ln" '{print name, $2}' >> "$TEMP_SCORES"
-            done
-        fi
-        
-        BEST_LIGAND=$(sort -k2 -n "$TEMP_SCORES" | head -1 | awk '{print $1}')
-        if [ -n "$BEST_LIGAND" ]; then
-            BEST_COMPLEX="${VINA_OUTPUT_DIR}/${BEST_LIGAND}/poses/pose_1_complex.pdb"
-            RENDER_FILE="${MAIN_OUTPUT_DIR}/top_hit_3d.png"
-            
-            if [ -f "$BEST_COMPLEX" ]; then
-                if pymol -cq "${SCRIPT_DIR}/render_top_hit.py" -- "$RECEPTOR_PDB_FILE" "$BEST_COMPLEX" "$RENDER_FILE" 2>/dev/null; then
-                    log_message "  -> 3D Render: $RENDER_FILE (Top hit: $BEST_LIGAND)"
-                else
-                    log_message "  -> WARNING: PyMOL rendering failed."
-                fi
-            else
-                log_message "  -> Skipping 3D render (best complex not found)"
-            fi
-        fi
-        rm "$TEMP_SCORES" 2>/dev/null || true
-    fi
-else
-    log_message "  -> Skipping 3D render (PyMOL not found)"
-fi
-
 # --- SCRIPT END ---
 end_time=$(date +%s)
 runtime=$((end_time - start_time))
