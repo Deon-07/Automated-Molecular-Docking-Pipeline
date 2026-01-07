@@ -1,138 +1,117 @@
 # Automated Molecular Docking Pipeline
 
-![Bash](https://img.shields.io/badge/Bash-Script-green)
-![AutoDock Vina](https://img.shields.io/badge/AutoDock-Vina-blue)
-![GNU Parallel](https://img.shields.io/badge/GNU-Parallel-red)
-![GPU](https://img.shields.io/badge/GPU-CUDA-brightgreen)
-![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
+## Overview
+This pipeline automates the molecular docking process using **AutoDock Vina** (CPU) or **Uni-Dock** (GPU). It handles:
+- Receptor preparation (PDB to PDBQT)
+- Ligand preparation (SDF/MOL2 to PDBQT)
+- **Automatic Docking Box Calculation**
+- Parallel processing (GNU Parallel)
+- Result summarization (CSV)
+- Visualization (Histogram & Bar Chart)
 
-High-throughput molecular docking with **parallel processing**, **GPU acceleration**, and **automated visualization**.
+## Features
+- **🚀 GPU Acceleration**: Uses Uni-Dock (v1.1.3+) for ultra-fast docking (requires NVIDIA GPU).
+- **⚡ Parallel CPU Docking**: Uses GNU Parallel to maximize CPU core usage.
+- **📦 Auto-Box**: Automatically calculates the binding box center from the receptor.
+  - *GPU Safety*: When using GPU mode, forces a safe box size (20x20x20 Å) to prevent VRAM overflow on smaller cards (e.g., RTX 3050/2050).
+- **📊 Visualization**: Generates high-quality plots of binding affinities.
 
-## ✨ Features
+## Prerequisites
 
-| Feature | Description |
-|---------|-------------|
-| **Parallel Processing** | GNU Parallel for concurrent docking jobs |
-| **GPU Acceleration** | Vina-GPU support for CUDA-enabled GPUs |
-| **Checkpointing** | Resume interrupted runs automatically |
-| **External Config** | `docking.conf` for easy configuration |
-| **CLI Arguments** | Override settings via command line |
-| **CSV Export** | Full results in `summary_results.csv` |
-| **Histogram** | Binding affinity distribution chart |
-| **Combined SDF** | All best poses in one file |
-| **Slurm Support** | HPC cluster job script generator |
+### 1. GPU Docking (Recommended)
+Install **Uni-Dock** via Conda:
+```bash
+# Install Uni-Dock
+conda create -n unidock_env unidock -c conda-forge
+```
 
-## 🚀 Quick Start
+### 2. Dependencies (Required for both modes)
+
+#### Option A: Conda (Recommended)
+Easily install all tool and plotting dependencies:
+```bash
+conda install -c conda-forge openbabel parallel pandas matplotlib
+```
+
+#### Option B: Ubuntu/Debian System Packages
+```bash
+sudo apt update
+sudo apt install -y openbabel parallel python3-pip
+pip install pandas matplotlib --break-system-packages
+```
+*Note: You also need standard `vina` installed if you plan to run in CPU mode.*
+
+## Configuration
+Edit `docking.conf` to set your file paths and parameters:
 
 ```bash
-# Basic usage
-./Auto-dock.sh -r receptor.pdb -l ./ligands/
+# --- INPUT FILES ---
+RECEPTOR_PDB_FILE="path/to/receptor.pdb"
+LIGAND_DIR="path/to/ligands"
 
-# With config file
-./Auto-dock.sh -c docking.conf
+# --- GPU CONFIGURATION ---
+USE_GPU="true"  # Set to "false" for CPU mode
+# Path to Uni-Dock binary (run `which unidock` inside conda env to find it)
+VINA_GPU_EXECUTABLE="/path/to/conda/envs/unidock_env/bin/unidock"
 
-# GPU mode with 8 concurrent jobs
-./Auto-dock.sh -c docking.conf -g -j 8
+# --- DOCKING PARAMETERS ---
+NUM_MODES="3"   # Number of poses to save per ligand
 ```
 
-## 📋 Requirements
+## Usage
 
+### 1. GPU Docking (Fastest)
+**Step 1: Activate Conda Environment**
 ```bash
-# Core (required)
-sudo apt install openbabel parallel
-
-# GPU mode (optional)
-# Install Vina-GPU from: https://github.com/DeltaGroupNJUPT/Vina-GPU-2.0
-
-# Visualization (optional)
-pip install pandas matplotlib
+conda activate unidock_env
 ```
 
-## ⚙️ Configuration
-
-### Option 1: Config File
-Copy and edit `docking.conf`:
+**Step 2: Run the Pipeline**
 ```bash
-RECEPTOR_PDB_FILE="/path/to/receptor.pdb"
-LIGAND_DIR="/path/to/ligands"
-VINA_EXECUTABLE="/path/to/vina"
-CENTER_X="37.75"
-CENTER_Y="10.50"
-CENTER_Z="48.43"
-# ... see docking.conf for all options
+bash Auto-dock.sh -c docking.conf -g -a
 ```
+- `-c`: Path to config file.
+- `-g`: Enable GPU mode (overrides config).
+- `-a`: **Auto-Calculate Box**.
+  - **Note**: In GPU mode, this calculates the correct *center* of the protein but forces the *size* to **20x20x20 Å** to ensure stability on GPUs with 4GB VRAM.
 
-### Option 2: Command Line
+### 2. CPU Docking
 ```bash
-./Auto-dock.sh [OPTIONS]
-
-Options:
-  -r FILE     Receptor PDB file
-  -l DIR      Ligand directory
-  -c FILE     Config file
-  -g          Enable GPU mode
-  -j NUM      Concurrent jobs (default: 4)
-  -t NUM      Threads per job (default: 2)
-  -h          Help
+bash Auto-dock.sh -c docking.conf -j 8
 ```
+- `-j 8`: Run 8 concurrent jobs (adjust based on your CPU cores).
 
-**Priority:** CLI args > Config file > Script defaults
-
-## 📊 Output Files
-
-```
-output_2024-01-15_14-30-25/
-├── summary_results.csv      # All docking scores (CSV)
-├── scores_histogram.png     # Affinity distribution chart
-├── all_docked_hits.sdf      # Combined best poses
-├── docking_run.log          # Execution log
-├── parallel_jobs.log        # Job status log
-└── vina_outputs/
-    └── ligand_name/
-        ├── ligand_name_log.txt
-        └── poses/
-            ├── pose_1_complex.pdb
-            └── ...
-```
-
-## 🖥️ HPC/Slurm Support
-
-Generate cluster job scripts:
+### 3. Auto-Box Command (Standalone)
+You can use the helper script to calculate box coordinates manually:
 ```bash
-./generate_slurm.sh -c docking.conf -o my_job.sbatch
-sbatch my_job.sbatch
+# Usage: ./calculate_box.sh <pdb_file> <padding> <fixed_size>
+./calculate_box.sh receptor.pdb 10 20
 ```
 
-Auto-calculates `--cpus-per-task` from your config.
+## Output
+Results are saved in `output_YYYY-MM-DD_HH-MM-SS/`:
+- **`summary_results.csv`**: Table of all docking scores.
+- **`scores_histogram.png`**: Distribution plot and bar chart of best scores.
+- **`all_docked_hits.sdf`**: Combined SDF file of all best poses.
+- **`vina_outputs/`**: Individual PDBQT output files for each ligand.
 
-## 📈 Binding Affinity Guide
+## Example Results
+The pipeline automatically generates visualizations of the docking scores:
 
-| Range | Interpretation |
-|-------|----------------|
-| < -8.0 kcal/mol | Excellent |
-| -8.0 to -6.0 | Good |
-| -6.0 to -4.5 | Moderate |
-| > -4.5 | Weak |
+### Binding Affinity Distribution
+![Binding Affinity Histogram](images/scores_histogram.png)
 
-## 🔧 Troubleshooting
+### Top Ligand Scores
+![Top Ligands Bar Chart](images/scores_histogram_barchart.png)
 
-| Error | Solution |
-|-------|----------|
-| `obabel not found` | `sudo apt install openbabel` |
-| `parallel not found` | `sudo apt install parallel` |
-| `Vina not found` | Update path in config |
-| Empty histogram | `pip install pandas matplotlib` |
+### Performance Comparison (CPU vs GPU)
+Benchmarking on 69 ligands shows a **~7.4x speedup** using GPU acceleration (Uni-Dock) compared to 8-core CPU docking.
+![Benchmark Plot](images/benchmark_plot.png)
 
-## 📚 References
+## Troubleshooting
+- **Exit Code 139 (Segfault)**: Usually caused by a docking box that is too large for your GPU VRAM. Use the `-a` flag in GPU mode (confirms safe 20Å box) or manually set `SIZE_X/Y/Z` to 20 in `docking.conf`.
+- **"conda not found"**: Ensure you have initialized conda or sourced the profile script (e.g., `source ~/miniconda3/etc/profile.d/conda.sh`).
+- **No plots generated**: Ensure you have `python3`, `pandas`, and `matplotlib` installed. The script silently skips plotting if these are missing.
 
-1. Trott & Olson (2010). AutoDock Vina. *J Comput Chem* 31(2):455-461
-2. O'Boyle et al. (2011). Open Babel. *J Cheminform* 3:33
-3. Ding et al. (2023). Vina-GPU 2.0. *J Chem Inf Model*
-
-## 📄 License
-
-GPL v3.0 - See [LICENSE](LICENSE)
-
----
-
-**Author:** Dip Kumar Ghosh ([@Deon-07](https://github.com/Deon-07))
+## License
+MIT License.

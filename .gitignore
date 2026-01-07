@@ -1,0 +1,13 @@
+# Docking Pipeline Outputs
+output_*/
+GPU_output_*/
+CPU_output_*/
+*.log
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+
+# System
+.DS_Store

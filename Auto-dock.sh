@@ -2,7 +2,7 @@
 
 # --- Automated Docking Script ---
 # Author: Dip Kumar Ghosh (Deon-07)
-# GitHub: https://github.com/Deon-07/automated-docking
+# GitHub: https://github.com/Deon-07/Automated-Molecular-Docking-Pipeline
 # 
 # This script prepares a PDB receptor and docks multiple ligands (SDF/MOL2)
 # against it using Open Babel and AutoDock Vina. It saves a PDB complex for
@@ -25,6 +25,7 @@ Options:
   -l DIR      Ligand directory (SDF/MOL2 files)
   -c FILE     Config file (default: ./docking.conf)
   -g          Enable GPU mode (requires Vina-GPU)
+  -a          Auto-calculate docking box from receptor
   -j NUM      Concurrent jobs for CPU mode (default: 4)
   -t NUM      Threads per job (default: 2)
   -h          Show this help message
@@ -63,15 +64,17 @@ CONFIG_FILE_PATH="./docking.conf"
 CLI_RECEPTOR=""
 CLI_LIGAND_DIR=""
 CLI_USE_GPU=""
+CLI_AUTO_BOX=""
 CLI_CONCURRENT_JOBS=""
 CLI_THREADS_PER_JOB=""
 
-while getopts "r:l:c:gj:t:h" opt; do
+while getopts "r:l:c:gaj:t:h" opt; do
     case $opt in
         r) CLI_RECEPTOR="$OPTARG" ;;
         l) CLI_LIGAND_DIR="$OPTARG" ;;
         c) CONFIG_FILE_PATH="$OPTARG" ;;
         g) CLI_USE_GPU="true" ;;
+        a) CLI_AUTO_BOX="true" ;;
         j) CLI_CONCURRENT_JOBS="$OPTARG" ;;
         t) CLI_THREADS_PER_JOB="$OPTARG" ;;
         h) show_help ;;
@@ -99,8 +102,45 @@ SIZE_Z="${SIZE_Z:-$DEFAULT_SIZE_Z}"
 CONCURRENT_JOBS="${CLI_CONCURRENT_JOBS:-${CONCURRENT_JOBS:-$DEFAULT_CONCURRENT_JOBS}}"
 THREADS_PER_JOB="${CLI_THREADS_PER_JOB:-${THREADS_PER_JOB:-$DEFAULT_THREADS_PER_JOB}}"
 USE_GPU="${CLI_USE_GPU:-${USE_GPU:-$DEFAULT_USE_GPU}}"
+AUTO_BOX="${CLI_AUTO_BOX:-${AUTO_BOX:-false}}"
+VINA_GPU_EXECUTABLE="${VINA_GPU_EXECUTABLE:-$DEFAULT_VINA_GPU_EXECUTABLE}"
 VINA_GPU_EXECUTABLE="${VINA_GPU_EXECUTABLE:-$DEFAULT_VINA_GPU_EXECUTABLE}"
 GPU_THREAD_COUNT="${GPU_THREAD_COUNT:-$DEFAULT_GPU_THREAD_COUNT}"
+NUM_MODES="${NUM_MODES:-9}"
+
+# --- AUTO-CALCULATE DOCKING BOX ---
+if [ "$AUTO_BOX" = "true" ]; then
+    echo "Auto-calculating docking box from receptor..."
+    RECEPTOR_FOR_BOX="${CLI_RECEPTOR:-${RECEPTOR_PDB_FILE}}"
+    
+    # Check if using GPU - if so, force a smaller fixed box size for VRAM safety
+    if [ "$USE_GPU" = "true" ]; then
+        echo "  [GPU Mode Detected] Forcing safe box size (20A) to prevent VRAM overflow..."
+        FIXED_SIZE_ARG="20"
+    else
+        FIXED_SIZE_ARG="0"
+    fi
+
+    if [ -f "$RECEPTOR_FOR_BOX" ]; then
+        # Use the calculate_box.sh script
+        # Usage: ./calculate_box.sh <pdb> <padding> <fixed_size>
+        BOX_COORDS_SCRIPT="./calculate_box.sh"
+        if [ -x "$BOX_COORDS_SCRIPT" ]; then
+            # Capture output and source it (it prints CENTER_X=... variables)
+            # We filter out lines starting with # to avoid noise, but eval handles assignments
+            eval $("$BOX_COORDS_SCRIPT" "$RECEPTOR_FOR_BOX" 10 "$FIXED_SIZE_ARG" | grep -v "^#")
+            
+            echo "  -> Center: ($CENTER_X, $CENTER_Y, $CENTER_Z)"
+            echo "  -> Size: ($SIZE_X, $SIZE_Y, $SIZE_Z)"
+        else
+            # Fallback inline awk (old method - keep as backup or removed? Better to rely on script now)
+            echo "WARNING: $BOX_COORDS_SCRIPT not found or executable. Using default/config values."
+        fi
+    else
+        echo "WARNING: Cannot auto-calculate box - receptor file not found: $RECEPTOR_FOR_BOX"
+    fi
+
+fi
 
 # --- DYNAMIC DIRECTORY SETUP ---
 # Get the absolute path of the directory where the script is being run
@@ -318,20 +358,35 @@ dock_single_ligand() {
     
     # 2. Run Docking (GPU or CPU mode)
     if [ "$USE_GPU" = "true" ]; then
-        # Vina-GPU docking
-        if ! "$VINA_GPU_EXECUTABLE" --config "$CONFIG_FILE" \
-            --ligand "$prepared_ligand_pdbqt" \
-            --out "$vina_out_file" 2>/dev/null; then
-            echo "[ERROR] Vina-GPU docking failed for $unique_id."
+        # Uni-Dock GPU docking
+        local vina_output
+        vina_output=$("$VINA_GPU_EXECUTABLE" --receptor "$PREPARED_RECEPTOR_FILE" \
+            --gpu_batch "$prepared_ligand_pdbqt" \
+            --center_x "$CENTER_X" --center_y "$CENTER_Y" --center_z "$CENTER_Z" \
+            --size_x "$SIZE_X" --size_y "$SIZE_Y" --size_z "$SIZE_Z" \
+            --dir "$ligand_result_dir" \
+            --num_modes "$NUM_MODES" \
+            --search_mode balance 2>&1)
+        local vina_exit=$?
+        echo "$vina_output" > "$vina_log_file"
+        # Uni-Dock creates output in dir with ligand name, move to expected location
+        local unidock_output="${ligand_result_dir}/${unique_id}_out.pdbqt"
+        if [ -f "$unidock_output" ] || [ -f "${ligand_result_dir}/${unique_id}.pdbqt" ]; then
+            [ -f "${ligand_result_dir}/${unique_id}.pdbqt" ] && mv "${ligand_result_dir}/${unique_id}.pdbqt" "$vina_out_file"
+        fi
+        if [ $vina_exit -ne 0 ] || [ ! -f "$vina_out_file" ]; then
+            echo "[ERROR] Uni-Dock docking failed for $unique_id. Exit code: $vina_exit"
             return 1
         fi
-        # Create a simple log for GPU mode (Vina-GPU outputs to stdout)
-        echo "GPU docking completed for $unique_id" > "$vina_log_file"
     else
         # Standard Vina CPU docking
-        if ! "$VINA_EXECUTABLE" --config "$CONFIG_FILE" --ligand "$prepared_ligand_pdbqt" \
-            --out "$vina_out_file" --log "$vina_log_file" --cpu "$THREADS_PER_JOB" 2>/dev/null; then
-            echo "[ERROR] Vina docking failed for $unique_id."
+        local vina_output
+        vina_output=$("$VINA_EXECUTABLE" --config "$CONFIG_FILE" --ligand "$prepared_ligand_pdbqt" \
+            --out "$vina_out_file" --cpu "$THREADS_PER_JOB" --num_modes "$NUM_MODES" 2>&1)
+        local vina_exit=$?
+        echo "$vina_output" > "$vina_log_file"
+        if [ $vina_exit -ne 0 ] || [ ! -f "$vina_out_file" ]; then
+            echo "[ERROR] Vina docking failed for $unique_id. Exit code: $vina_exit"
             return 1
         fi
     fi
@@ -378,8 +433,9 @@ dock_single_ligand() {
 # Export function and variables for GNU Parallel
 export -f dock_single_ligand
 export VINA_OUTPUT_DIR PREPARED_LIGAND_DIR VINA_EXECUTABLE VINA_SPLIT_EXECUTABLE
-export CONFIG_FILE RECEPTOR_PDB_FILE THREADS_PER_JOB LIGAND_DIR
-export USE_GPU VINA_GPU_EXECUTABLE
+export CONFIG_FILE RECEPTOR_PDB_FILE THREADS_PER_JOB LIGAND_DIR PREPARED_RECEPTOR_FILE
+export USE_GPU VINA_GPU_EXECUTABLE NUM_MODES
+export CENTER_X CENTER_Y CENTER_Z SIZE_X SIZE_Y SIZE_Z
 
 # --- Ligand Preparation and Docking (Parallel) ---
 log_message "--------------------------------------------------"
@@ -490,13 +546,18 @@ rm "$temp_scores_file"
 log_message "--------------------------------------------------"
 log_message "Generating combined SDF file for all best poses..."
 COMBINED_SDF="${MAIN_OUTPUT_DIR}/all_docked_hits.sdf"
+TEMP_COMBINED_PDB="${MAIN_OUTPUT_DIR}/all_poses_temp.pdb"
 
-# Find all best poses (pose_1) and convert to combined SDF
-BEST_POSES=$(find "${VINA_OUTPUT_DIR}" -path "*/poses/pose_1_complex.pdb" -type f 2>/dev/null)
-if [ -n "$BEST_POSES" ]; then
-    echo "$BEST_POSES" | xargs obabel -ipdb -osdf -O "$COMBINED_SDF" 2>/dev/null
+# 1. Safely concatenate all PDB files (handles unlimited file counts)
+find "${VINA_OUTPUT_DIR}" -path "*/poses/pose_1_complex.pdb" -print0 | xargs -0 cat > "$TEMP_COMBINED_PDB"
+
+if [ -s "$TEMP_COMBINED_PDB" ]; then
+    # 2. Convert the single combined PDB to SDF
+    obabel -ipdb "$TEMP_COMBINED_PDB" -osdf -O "$COMBINED_SDF" 2>/dev/null
+    
     COMPOUND_COUNT=$(grep -c '^\$\$\$\$' "$COMBINED_SDF" 2>/dev/null || echo "0")
     log_message "  -> Combined SDF: $COMBINED_SDF ($COMPOUND_COUNT compounds)"
+    rm "$TEMP_COMBINED_PDB"
 else
     log_message "  -> No poses found to combine into SDF."
 fi
@@ -533,4 +594,4 @@ log_message "All results saved in: ${MAIN_OUTPUT_DIR}"
 log_message "Total runtime: $((runtime / 60)) minutes and $((runtime % 60)) seconds."
 log_message ""
 log_message "=== Script finished successfully ==="
-log_message "For issues and contributions, visit: https://github.com/Deon-07/automated-docking"
+log_message "For issues and contributions, visit: https://github.com/Deon-07/Automated-Molecular-Docking-Pipeline"
